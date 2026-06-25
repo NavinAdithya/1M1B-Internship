@@ -61,7 +61,10 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     setIsLoading(true);
 
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const model = genAI.getGenerativeModel({
+        model: "gemini-2.5-flash",
+        systemInstruction: SYSTEM_PROMPT,
+      });
 
       // Build chat history from existing messages (skip welcome)
       const history = updatedMessages
@@ -76,7 +79,6 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
 
       const chat = model.startChat({
         history,
-        systemInstruction: SYSTEM_PROMPT,
       });
 
       const assistantId = (Date.now() + 1).toString();
