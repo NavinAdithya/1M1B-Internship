@@ -3,6 +3,7 @@
 import { motion, AnimatePresence } from "motion/react";
 import { X, SendHorizontal, Zap } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 interface Message {
   id: string;
@@ -16,6 +17,20 @@ const WELCOME_MESSAGE: Message = {
   content:
     "👋 Hi! I'm EnergyBot, your AI assistant for energy saving.\n\nAsk me anything about:\n• Reducing electricity bills\n• Clean energy options\n• Sustainable daily habits\n• Solar panel guidance\n\nHow can I help you today?",
 };
+
+const SYSTEM_PROMPT = `You are EnergyBot, an expert AI assistant specializing in sustainable living, clean energy, and energy-saving tips. You are part of a project supporting UN SDG 7 — Affordable and Clean Energy.
+
+Your guidelines:
+- Provide clear, actionable, and practical advice
+- Use bullet points and structured formatting for readability
+- Be encouraging and positive about sustainable choices
+- When discussing costs or savings, provide realistic estimates
+- Always consider the user's context (home, office, community)
+- Keep responses concise but thorough`;
+
+const API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || "";
+
+const genAI = new GoogleGenerativeAI(API_KEY);
 
 export function ChatModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
@@ -40,43 +55,47 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     if (!trimmed || isLoading) return;
 
     const userMsg: Message = { id: Date.now().toString(), role: "user", content: trimmed };
-    setMessages((prev) => [...prev, userMsg]);
+    const updatedMessages = [...messages, userMsg];
+    setMessages(updatedMessages);
     setInput("");
     setIsLoading(true);
 
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [...messages, userMsg].map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-        }),
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+      // Build chat history from existing messages (skip welcome)
+      const history = updatedMessages
+        .filter((m) => m.id !== "welcome")
+        .map((m) => ({
+          role: m.role === "user" ? "user" as const : "model" as const,
+          parts: [{ text: m.content }],
+        }));
+
+      // Remove last user message from history (it will be sent as the new message)
+      const lastUserMsg = history.pop();
+
+      const chat = model.startChat({
+        history,
+        systemInstruction: SYSTEM_PROMPT,
       });
 
-      if (!res.ok) throw new Error("API error");
-
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
       const assistantId = (Date.now() + 1).toString();
-
       setMessages((prev) => [...prev, { id: assistantId, role: "assistant", content: "" }]);
 
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = decoder.decode(value, { stream: true });
+      const result = await chat.sendMessageStream(lastUserMsg?.parts[0].text || trimmed);
+
+      for await (const chunk of result.stream) {
+        const text = chunk.text();
+        if (text) {
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === assistantId ? { ...m, content: m.content + chunk } : m
+              m.id === assistantId ? { ...m, content: m.content + text } : m
             )
           );
         }
       }
-    } catch {
+    } catch (err) {
+      console.error("Gemini API error:", err);
       setMessages((prev) => [
         ...prev,
         {
@@ -154,7 +173,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
                 </motion.div>
               ))}
 
-              {isLoading && (
+              {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
